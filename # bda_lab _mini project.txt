@@ -1,0 +1,161 @@
+# bda_lab _mini project
+#install the  spark and pyspark in colab
+!pip install spark
+!pip install pyspark
+
+#link colab
+https://colab.research.google.com/drive/1OBeuGyjiVvzTLFO3ph6RaOZIzwFyChin?usp=sharing
+
+#code of implementation
+# Import necessary libraries
+from pyspark.sql import SparkSession
+from pyspark.ml.feature import VectorAssembler, StringIndexer
+from pyspark.ml.clustering import KMeans
+from pyspark.ml.evaluation import ClusteringEvaluator
+import pandas as pd
+import matplotlib.pyplot as plt
+
+# Initialize Spark session
+spark = SparkSession.builder.appName("JobClustering").getOrCreate()
+
+# Load the dataset
+data = spark.read.csv("/content/it job 2019-23.csv", header=True, inferSchema=True)
+
+# Display schema and preview the data
+data.printSchema()
+data.show(5)
+
+from pyspark.sql.functions import col
+
+# Ensure columns exist in the DataFrame
+expected_cols = ["Job Title", "Location", "Industry", "Job Type"]
+available_cols = [col for col in expected_cols if col in data.columns]
+
+# Handle missing values in the available columns
+data = data.dropna(subset=available_cols)
+
+# Apply StringIndexer only on available columns
+indexers = []
+for col_name in available_cols:
+    try:
+        indexer = StringIndexer(inputCol=col_name, outputCol=f"{col_name}_index").fit(data)
+        indexers.append(indexer)
+    except Exception as e:
+        print(f"Error processing column '{col_name}': {e}")
+
+# Transform the data with indexers
+for indexer in indexers:
+    data = indexer.transform(data)
+
+# Confirm successful indexing
+data.show(5)
+
+# Clean column names by removing leading and trailing spaces
+from pyspark.sql.functions import col
+
+data = data.select([col(c).alias(c.strip()) for c in data.columns])
+
+# Confirm columns are clean
+print("Columns after cleaning:")
+print(data.columns)
+
+# Extract "Salary Range" into numerical values
+from pyspark.sql.functions import regexp_extract
+
+data = data.withColumn("Salary_Min", regexp_extract(col("Salary Range"), r"(\d+),?(\d+)?", 1).cast("float"))
+data = data.withColumn("Salary_Max", regexp_extract(col("Salary Range"), r"(\d+),?(\d+)?", 2).cast("float"))
+data = data.withColumn("Salary_Avg", (col("Salary_Min") + col("Salary_Max")) / 2)
+
+# Show results
+data.select("Salary Range", "Salary_Min", "Salary_Max", "Salary_Avg").show(5)
+
+
+
+# Drop unnecessary columns to simplify the data
+data = data.drop("Salary Range", "Salary_Min", "Salary_Max")
+
+# Assemble features into a single vector column for clustering
+feature_cols = ["Salary_Avg", "Job Title_index", "Location_index", "Industry_index"]
+assembler = VectorAssembler(inputCols=feature_cols, outputCol="features")
+data = assembler.transform(data)
+
+# Apply K-Means Clustering
+kmeans = KMeans(featuresCol="features", k=4, seed=42)  # Choose k=4 clusters (can be adjusted)
+model = kmeans.fit(data)
+
+# Make predictions
+clusters = model.transform(data)
+
+# Evaluate clustering performance
+evaluator = ClusteringEvaluator(featuresCol="features", predictionCol="prediction", metricName="silhouette")
+silhouette_score = evaluator.evaluate(clusters)
+print(f"Silhouette Score: {silhouette_score}")
+
+# Show clustered data
+clusters.select("Job Title", "Location", "Industry", "Salary_Avg", "prediction").show()
+
+# Visualize cluster distributions
+cluster_counts = clusters.groupBy("prediction").count().toPandas()
+
+plt.figure(figsize=(8, 6))
+plt.bar(cluster_counts["prediction"], cluster_counts["count"], color="skyblue", edgecolor="black")
+plt.title("Cluster Distribution")
+plt.xlabel("Cluster")
+plt.ylabel("Number of Jobs")
+plt.xticks(cluster_counts["prediction"])
+plt.tight_layout()
+plt.show()
+
+# Cluster centroids
+print("Cluster Centers:")
+for center in model.clusterCenters():
+    print(center)
+
+# Save predictions back to a CSV (optional)
+clusters.select("Job Title", "Location", "Industry", "Salary_Avg", "prediction") \
+    .write.csv("/content/clustered_jobs.csv", header=True)
+##################################
+
+
+# code of visualization.
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+# Visualizing the cluster distribution
+cluster_counts = clusters.groupBy("prediction").count().toPandas()
+
+plt.figure(figsize=(8, 6))
+plt.bar(cluster_counts["prediction"], cluster_counts["count"], color="skyblue", edgecolor="black")
+plt.title("Cluster Distribution", fontsize=16)
+plt.xlabel("Cluster", fontsize=12)
+plt.ylabel("Number of Jobs", fontsize=12)
+plt.xticks(cluster_counts["prediction"], rotation=45)
+plt.tight_layout()
+plt.show()
+
+# Visualizing Salary_Avg vs Cluster for all jobs
+clusters_df = clusters.select("Salary_Avg", "prediction").toPandas()
+
+plt.figure(figsize=(10, 6))
+sns.scatterplot(x="Salary_Avg", y="prediction", data=clusters_df, palette="Set2", s=100, edgecolor="black")
+plt.title("Average Salary vs Cluster", fontsize=16)
+plt.xlabel("Average Salary", fontsize=12)
+plt.ylabel("Cluster", fontsize=12)
+plt.tight_layout()
+plt.show()
+
+# Visualizing Cluster Centers
+centroids_df = pd.DataFrame(model.clusterCenters(), columns=["Salary_Avg", "Job Title_index", "Location_index", "Industry_index"])
+
+plt.figure(figsize=(10, 6))
+sns.heatmap(centroids_df, annot=True, cmap="viridis", fmt=".2f", linewidths=0.5)
+plt.title("Cluster Centroids", fontsize=16)
+plt.xlabel("Features", fontsize=12)
+plt.ylabel("Clusters", fontsize=12)
+plt.tight_layout()
+plt.show()
+
+
+
+
