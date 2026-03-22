@@ -14,7 +14,7 @@ The dashboard provides a complete analytical view of EV adoption:
 * **PHEV Vehicles:** 34K (22%)
 
 ---
-
+ 
 ### 📈 Key Visualizations
 
 1. **Model Year Trend**
